@@ -3,7 +3,7 @@ layout: doc
 
 title: MacOS初始化
 prev:
-  text: 'NixVim学习1'
+  text: '自定义Nixvim'
   link: './post1'
 ---
 
