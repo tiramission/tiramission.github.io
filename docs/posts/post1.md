@@ -3,7 +3,7 @@ layout: doc
 
 title: NixVim学习1
 next:
-  text: 'NixVim学习2'
+  text: 'MacOS初始化'
   link: './post2'
 ---
 

@@ -15,11 +15,11 @@ hero:
       text: Nix
       link: https://nixos.org
 features:
-  - title: 自定义Nixvim1
+  - title: 自定义Nixvim
     details: via nix noevim
     link: ./post1
-  - title: 自定义Nixvim2
-    details: via nix noevim
+  - title: MacOS初始化
+    details: var utm macos
     link: ./post2
 
 ---

@@ -1,42 +1,17 @@
 ---
 layout: doc
 
-title: NixVim学习2
+title: MacOS初始化
 prev:
   text: 'NixVim学习1'
   link: './post1'
 ---
 
-# 自定义 Nixvim
+# MacOS初始化
 
-### 1. 克隆代码仓库：
+### 1. 修改主机名：
 ```bash
-git clone https://github.com/tiramission/nixvim
+sudo scutil --get HostName
+sudo scutil --set HostName <hostname>
 ```
 
-### 2. 编辑
-
-> 自定义`config` 目录下的相关配置
-
-### 3. 构建
-
-```bash
-nix build -L
-```
-
-### 4. 使用
-```bash
-./result/bin/nvim
-```
-
-### 5. 安装
-```bash
-# 本地仓库
-nix profile add .
-# 远程仓库
-nix profile add github:tiramission/nixvim
-```
-> 更新
-```bash
-nix profile upgrade nixvim --refresh
-```
