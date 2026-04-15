@@ -41,15 +41,24 @@ features:
 使用 Nix 管理 Neovim 配置，声明式、可重现，支持多平台。
 :::
 
-## 快速开始
+## 关于此文档
 
-你可是使用Nix对此项目进行开发
+本项目使用 [VitePress](https://vitepress.dev/) 构建，用于展示个人项目文档。
+
+### 技术栈
+
+- **VitePress** — Vue 驱动的静态网站生成器
+- **Nix** — 可重现的开发环境
+
+### 开发
 
 ```sh
+# 进入开发环境
 nix develop
-```
 
-### 构建
-```sh
+# 构建文档
 bun run docs:build
+
+# 预览构建结果
+bun run docs:preview
 ```
