@@ -20,46 +20,47 @@ cachix use tiramission
 
 ## 安装使用
 
-### 克隆配置
+### 方式一：直接运行（免克隆）
 
 ```bash
-git clone https://github.com/tiramission/nixvim
-cd nixvim
-```
-
-### 方式一：直接运行
-
-```bash
-nix run .
+nix run github:tiramission/nixvim
 ```
 
 ### 方式二：安装到用户环境
 
 ```bash
-nix profile install .
+nix profile add github:tiramission/nixvim
 ```
 
 以后直接运行 `nvim` 即可。
 
-### 方式三：NixOS 模块集成
+### 方式三：克隆配置后运行
+
+```bash
+git clone https://github.com/tiramission/nixvim
+cd nixvim
+nix run .
+```
+
+### 方式四：NixOS 模块集成
 
 将 flake 集成到你的 NixOS 配置中：
 
 ```nix
 {
   inputs.nixvim.url = "github:tiramission/nixvim";
-  
+
   outputs = inputs @ {
-    nixpkgs-lib,
+    nixpkgs,
     nixvim,
     ...
   }: {
-    # NixOS 配置
     nixosConfigurations.your-hostname = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
-        nixvim.nixosModules.default
-        # 你的其他 NixOS 配置
+        {
+          environment.systemPackages = [ nixvim.packages.x86_64-linux.default ];
+        }
       ];
     };
   };

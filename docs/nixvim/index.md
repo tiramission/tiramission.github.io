@@ -15,6 +15,9 @@ hero:
     - theme: alt
       text: 插件列表
       link: /nixvim/plugins
+    - theme: alt
+      text: GitHub
+      link: https://github.com/tiramission/nixvim
 
 features:
   - icon: 📦
