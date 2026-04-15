@@ -1,0 +1,139 @@
+# 使用指南
+
+## 安装
+
+### 使用 Go
+
+```bash
+go install github.com/tiramission/oci-sync@latest
+```
+
+或从源码构建：
+
+```bash
+git clone https://github.com/tiramission/oci-sync.git
+cd oci-sync
+go build -o oci-sync .
+```
+
+### 使用 Nix (Flake)
+
+```bash
+nix run github:tiramission/oci-sync -- --help
+```
+
+开发者进入开发环境：
+
+```bash
+nix develop github:tiramission/oci-sync
+```
+
+## 前置条件
+
+已通过 `docker login` 登录目标仓库：
+
+```bash
+docker login registry.example.com
+```
+
+## push — 推送到仓库
+
+```bash
+# 推送目录（不加密）
+oci-sync push --local ./mydir --remote registry.example.com/myrepo:latest
+
+# 推送文件（加密）
+oci-sync push --local ./secret.txt --remote registry.example.com/myrepo:encrypted --passphrase mypassword
+
+# 使用简写标志
+oci-sync push -l ./mydir -r registry.example.com/myrepo:latest
+```
+
+## pull — 从仓库拉取
+
+```bash
+# 拉取（不加密）
+oci-sync pull --remote registry.example.com/myrepo:latest --local ./output
+
+# 拉取并解密
+oci-sync pull --remote registry.example.com/myrepo:encrypted --local ./output --passphrase mypassword
+
+# 使用简写标志
+oci-sync pull -r registry.example.com/myrepo:latest -l ./output
+```
+
+## x push / x pull / x list / x delete — 实验性快捷命令
+
+先设置实验性仓库环境变量：
+
+```bash
+export OCI_SYNC_EXPERIMENTAL_REPO=registry.example.com/myteam/files
+```
+
+然后只通过 `--tag` 指定远程标签：
+
+```bash
+# 推送目录
+oci-sync x push --local ./mydir --tag latest
+
+# 推送文件并加密
+oci-sync x push --local ./secret.txt --tag encrypted --passphrase mypassword
+
+# 拉取到本地目录
+oci-sync x pull --tag latest --local ./output
+
+# 拉取并解密
+oci-sync x pull --tag encrypted --local ./output --passphrase mypassword
+
+# 列出实验性仓库下的所有 tags
+oci-sync x list
+
+# 删除实验性仓库中的指定 tag
+oci-sync x delete --tag old-release
+```
+
+## delete — 删除仓库中的文件
+
+```bash
+# 从远程仓库删除推送的文件
+oci-sync delete --remote registry.example.com/myrepo:latest
+
+# 使用简写标志
+oci-sync delete -r registry.example.com/myrepo:latest
+```
+
+## list — 列出仓库中的文件镜像
+
+```bash
+# 检索远程仓库中特定路径的文件镜像
+oci-sync list --remote registry.example.com/myrepo
+
+# 检索整个注册表下的所有由本工具上传的镜像记录
+oci-sync list -r registry.example.com
+```
+
+## 参数说明
+
+| 参数 | 说明 |
+|------|------|
+| `--local`, `-l` | 本地文件或目录路径（push）或目标目录（pull） |
+| `--remote`, `-r` | OCI 仓库引用 (push/pull/delete) 或注册表引用 (list) |
+| `--tag` | 实验性 `x push` / `x pull` / `x delete` 使用的标签 |
+| `--passphrase` | 加密/解密口令（可选） |
+| `--quiet`, `-q` | 开启静默模式，仅输出错误信息 |
+
+## 环境变量
+
+| 变量名 | 说明 |
+|------|------|
+| `OCI_SYNC_EXPERIMENTAL_REPO` | `oci-sync x push/pull/list/delete` 使用的仓库，格式为 `<registry>/<repository>`，不包含 tag |
+
+## 工作原理
+
+**push**：本地文件/目录 → tar.gz 打包 → [可选] AES-256-GCM 加密 → 推送至 OCI 仓库
+
+**pull**：从 OCI 仓库拉取 → [可选] 解密 → 解压 tar.gz → 写入本地
+
+加密使用 scrypt 从口令派生密钥（N=32768），每次加密使用随机 salt 和 nonce，安全可靠。
+
+认证直接读取 `~/.docker/config.json`，与 Docker credential store 完全兼容。

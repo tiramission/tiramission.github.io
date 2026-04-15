@@ -1,18 +1,25 @@
 import { defineConfig } from 'vitepress'
 
-// https://vitepress.dev/reference/site-config
 export default defineConfig({
   title: "提拉米线",
   description: "A VitePress Site",
   cleanUrls: true,
   themeConfig: {
-    // https://vitepress.dev/reference/default-theme-config
     nav: [
       { text: '主页', link: '/' },
-      { text: '博客', link: '/posts/' },
+      { text: 'oci-sync', link: '/oci-sync/' },
     ],
 
-    sidebar: [],
+    sidebar: [
+      {
+        text: 'oci-sync',
+        items: [
+          { text: '介绍', link: '/oci-sync/' },
+          { text: '使用指南', link: '/oci-sync/guide' },
+          { text: '设计文档', link: '/oci-sync/design' },
+        ]
+      }
+    ],
 
     socialLinks: [
       { icon: 'github', link: 'https://github.com/tiramission' }
