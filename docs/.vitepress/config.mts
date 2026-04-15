@@ -4,6 +4,9 @@ export default defineConfig({
   title: "提拉米线",
   description: "A VitePress Site",
   cleanUrls: true,
+  head: [
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }]
+  ],
   themeConfig: {
     nav: [
       { text: '主页', link: '/' },
