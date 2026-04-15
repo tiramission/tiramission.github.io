@@ -27,6 +27,20 @@ features:
     link: https://nixos.org
 ---
 
+## 项目
+
+::: tip [oci-sync](/oci-sync/)
+**文件同步工具**
+
+将本地文件同步到 OCI 镜像仓库，支持 AES-256-GCM 加密，使用 Docker credential store 认证。
+:::
+
+::: tip [nixvim](/nixvim/)
+**Neovim 配置管理**
+
+使用 Nix 管理 Neovim 配置，声明式、可重现，支持多平台。
+:::
+
 ## 快速开始
 
 你可是使用Nix对此项目进行开发
