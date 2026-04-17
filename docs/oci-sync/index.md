@@ -25,7 +25,7 @@ features:
     details: 支持 AES-256-GCM 端到端加密，密钥通过 scrypt 高强度派生，保护敏感数据安全
   - icon: 🔑
     title: 无缝认证
-    details: 自动读取 Docker credential store，支持 macOS Keychain、Windows Credential Manager 和 Linux secret service
+    details: 支持配置文件 per-registry 凭据认证，自动读取 Docker credential store
   - icon: 🌍
     title: 跨平台支持
     details: 兼容 Docker Hub、GHCR、Harbor、ACR 等任意 OCI Distribution Spec 兼容的镜像仓库
@@ -34,5 +34,5 @@ features:
     details: 轻量高效，单二进制文件，无额外运行时依赖，支持多平台交叉编译
   - icon: 🔧
     title: 多种安装方式
-    details: 支持 Go 安装、Nix Flake 一键运行，开发者可进入隔离的 Nix 开发环境
+    details: 支持 Go 安装、Nix Flake 一键运行、Nix Home Manager 模块化配置
 ---

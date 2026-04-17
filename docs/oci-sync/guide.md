@@ -28,13 +28,75 @@ nix run github:tiramission/oci-sync -- --help
 nix develop github:tiramission/oci-sync
 ```
 
+### 使用 Home Manager
+
+在 `flake.nix` 中引用 home-manager 模块：
+
+```nix
+{
+  inputs.home-manager.url = "github:nix-community/home-manager";
+  inputs.oci-sync.url = "github:tiramission/oci-sync";
+
+  outputs = { self, nixpkgs, home-manager, oci-sync }: {
+    homeConfigurations.myuser = home-manager.lib.homeManagerConfiguration {
+      modules = [
+        home-manager.nixosModules.home-manager
+        {
+          home.username = "myuser";
+          home.homeDirectory = "/home/myuser";
+          programs.oci-sync = {
+            enable = true;
+            settings = {
+              shortcuts = {
+                x.repo = "registry.example.com/myteam/files";
+              };
+            };
+          };
+        }
+        oci-sync.homeModules.oci-sync
+      ];
+    };
+  };
+}
+```
+
 ## 前置条件
 
-已通过 `docker login` 登录目标仓库：
+已通过 `docker login` 登录目标仓库，或在配置文件中配置凭据：
 
 ```bash
 docker login registry.example.com
 ```
+
+## 配置文件
+
+配置文件使用 YAML 格式，搜索路径如下：
+
+1. 当前工作目录 `./oci-sync.yaml`
+2. 用户配置目录 `~/.config/oci-sync/oci-sync.yaml`
+
+配置文件格式：
+
+```yaml
+shortcuts:
+  x:
+    repo: registry.example.com/myteam/files
+
+auths:
+  registry.example.com:
+    username: myuser
+    password: mytoken
+```
+
+可用配置项：
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `shortcuts.<name>.repo` | - | 动态命令的默认仓库地址 |
+| `auths.<registry>.username` | - | 该仓库的认证用户名 |
+| `auths.<registry>.password` | - | 该仓库的认证密码或令牌 |
+
+认证优先级：**配置文件 `auths` > Docker credential store**
 
 ## push — 推送到仓库
 
@@ -62,15 +124,9 @@ oci-sync pull --remote registry.example.com/myrepo:encrypted --local ./output --
 oci-sync pull -r registry.example.com/myrepo:latest -l ./output
 ```
 
-## x push / x pull / x list / x delete — 实验性快捷命令
+## \<name\> push / pull / list / delete — 动态快捷命令
 
-先设置实验性仓库环境变量：
-
-```bash
-export OCI_SYNC_EXPERIMENTAL_REPO=registry.example.com/myteam/files
-```
-
-然后只通过 `--tag` 指定远程标签：
+动态命令通过配置文件 `shortcuts.<name>.repo` 定义，只需通过 `--tag` 指定标签：
 
 ```bash
 # 推送目录
@@ -85,10 +141,13 @@ oci-sync x pull --tag latest --local ./output
 # 拉取并解密
 oci-sync x pull --tag encrypted --local ./output --passphrase mypassword
 
-# 列出实验性仓库下的所有 tags
+# 列出快捷仓库下的所有 tags
 oci-sync x list
 
-# 删除实验性仓库中的指定 tag
+# 以 JSON 格式输出
+oci-sync x list --format json
+
+# 删除快捷仓库中的指定 tag
 oci-sync x delete --tag old-release
 ```
 
@@ -110,6 +169,12 @@ oci-sync list --remote registry.example.com/myrepo
 
 # 检索整个注册表下的所有由本工具上传的镜像记录
 oci-sync list -r registry.example.com
+
+# 以 JSON 格式输出
+oci-sync list -r registry.example.com/myrepo --format json
+
+# 以 YAML 格式输出
+oci-sync list -r registry.example.com/myrepo -f yaml
 ```
 
 ## 参数说明
@@ -118,22 +183,17 @@ oci-sync list -r registry.example.com
 |------|------|
 | `--local`, `-l` | 本地文件或目录路径（push）或目标目录（pull） |
 | `--remote`, `-r` | OCI 仓库引用 (push/pull/delete) 或注册表引用 (list) |
-| `--tag` | 实验性 `x push` / `x pull` / `x delete` 使用的标签 |
+| `--tag` | 动态快捷命令使用的标签 |
 | `--passphrase` | 加密/解密口令（可选） |
+| `--format`, `-f` | 输出格式：`table`（默认）、`json`、`yaml` |
 | `--quiet`, `-q` | 开启静默模式，仅输出错误信息 |
-
-## 环境变量
-
-| 变量名 | 说明 |
-|------|------|
-| `OCI_SYNC_EXPERIMENTAL_REPO` | `oci-sync x push/pull/list/delete` 使用的仓库，格式为 `<registry>/<repository>`，不包含 tag |
 
 ## 工作原理
 
 **push**：本地文件/目录 → tar.gz 打包 → [可选] AES-256-GCM 加密 → 推送至 OCI 仓库
 
-**pull**：从 OCI 仓库拉取 → [可选] 解密 → 解压 tar.gz → 写入本地
+**pull**：从 OCI 仓库检查加密状态 → 校验密码参数（若缺失则快速失败）→ 拉取数据 → [可选] 解密 → 解压 tar.gz → 写入本地
 
 加密使用 scrypt 从口令派生密钥（N=32768），每次加密使用随机 salt 和 nonce，安全可靠。
 
-认证直接读取 `~/.docker/config.json`，与 Docker credential store 完全兼容。
+认证支持配置文件 per-registry 凭据（`auths.<registry>`），也兼容 Docker credential store（`~/.docker/config.json`）。

@@ -1,8 +1,8 @@
-# 设计文档
+# oci-sync 设计文档
 
-> 版本：0.1.0 | 更新时间：2026-03-23
+> 版本：0.1.0 | 更新时间：2026-04-16
 
-## 项目概述
+## 1. 项目概述
 
 `oci-sync` 是一个 Go 语言命令行工具，将本地文件或目录以 **OCI artifact** 的形式同步到任意兼容 OCI Distribution Spec 的镜像仓库（Docker Hub、GHCR、Harbor、ACR 等），支持可选的 AES-256-GCM 加密。
 
@@ -12,12 +12,14 @@
 - 跨机器、跨环境分发文件，借助镜像仓库的权限管理做访问控制
 - 敏感文件加密存储，密钥不离开本地
 
-## 整体架构
+---
+
+## 2. 整体架构
 
 ```
 ┌──────────────────────────────────────────────────────────┐
 │                         CLI 层                            │
-│ cmd/root.go   cmd/push.go   cmd/pull.go   cmd/x.go       │
+│ cmd/root.go   cmd/push.go   cmd/pull.go   cmd/shortcut.go│
 │ cmd/delete.go cmd/list.go                                │
 └──────────────┬───────────────┬──────────────┬────────────┘
                │              │
@@ -35,7 +37,6 @@
 ```
 
 **数据流（push）**
-
 ```
 本地路径 → [archive.Pack] → tar.gz bytes
          → [crypto.Encrypt]（可选）→ 加密 bytes
@@ -43,14 +44,42 @@
 ```
 
 **数据流（pull）**
-
 ```
-Registry → [oci.Pull] → layer bytes + annotations
+Registry → [oci.IsEncrypted] → 检查加密状态（manifest 只读）
+         → 校验 --passphrase 参数（若缺失则快速失败，无需下载）
+         → [oci.Pull] → layer bytes + annotations
          → [crypto.Decrypt]（若加密）→ tar.gz bytes
          → [archive.Unpack] → 本地路径
 ```
 
-## 项目结构
+**数据流（shortcut commands）**
+```
+CLI 参数传入（--tag + shortcuts.<name>.repo 配置）
+         → 拼装完整 remote ref
+         → 复用标准 [push]/[pull]/[delete] 数据流
+
+CLI 参数传入（shortcuts.<name>.repo 配置）
+         → 解析 repository
+         → 复用标准 [list] 数据流
+```
+
+**数据流（delete）**
+```
+CLI 参数传入 → [oci.Delete] 解析 descriptor → Registry 删除 API
+```
+
+**数据流（list）**
+```
+CLI 参数传入 → [oci.List] (支持 Registry/Repo 自动解析)
+             → [reg.Repositories] (若为 Registry) → 遍历 repos
+             → [repo.Tags] → 遍历 tags → [repo.Fetch] 获取 Manifest
+             → 过滤 io.oci-sync.version 标记 → 返回 ArtifactInfo 列表
+             → 格式化表格输出 (显示 REPO, TAG, DIGEST 等)
+```
+
+---
+
+## 3. 项目结构
 
 ```
 oci-sync/
@@ -64,11 +93,13 @@ oci-sync/
 │   ├── root.go                    # 根命令 & 全局配置（--quiet / -q）
 │   ├── push.go                    # push 子命令
 │   ├── pull.go                    # pull 子命令
-│   ├── ex.go                      # experimental 子命令组
+│   ├── shortcut.go                # 动态 shortcut 子命令组
 │   ├── delete.go                  # delete 子命令
 │   ├── list.go                    # list 子命令
 │   └── utils.go                   # 工具函数（formatBytes）
 └── internal/
+    ├── config/
+    │   └── config.go              # 配置文件支持（Viper）
     ├── archive/
     │   ├── archive.go             # tar.gz 打包/解包
     │   └── archive_test.go        # 单元测试
@@ -79,20 +110,23 @@ oci-sync/
         └── oci.go                 # OCI push/pull（oras-go v2）
 ```
 
-## 模块设计
+---
 
-### `internal/archive` — 打包/解包
+## 4. 模块设计
+
+### 4.1 `internal/archive` — 打包/解包
 
 | 函数 | 签名 | 说明 |
 |------|------|------|
 | `Pack` | `(srcPath string) ([]byte, error)` | 将文件或目录打包为 tar.gz，返回字节 |
 | `Unpack` | `(data []byte, destPath string) error` | 将 tar.gz 字节解包到指定目录 |
 
+**实现细节**
 - 使用标准库 `archive/tar` + `compress/gzip`，无额外依赖
-- 目录打包保留完整的子目录结构
+- 目录打包保留完整的子目录结构，以 `filepath.Walk` 遍历
 - 解包时进行路径穿越检查（Path Traversal Security）
 
-### `internal/crypto` — 加密/解密
+### 4.2 `internal/crypto` — 加密/解密
 
 | 函数 | 签名 | 说明 |
 |------|------|------|
@@ -100,54 +134,74 @@ oci-sync/
 | `Decrypt` | `(data []byte, passphrase string) ([]byte, error)` | 解密数据 |
 
 **加密算法**
-
 - **KDF**：scrypt（N=32768, r=8, p=1）→ 32 字节密钥
 - **加密**：AES-256-GCM（认证加密，同时提供保密性和完整性）
 - **存储格式**：`[salt(32B) | nonce(12B) | ciphertext+GCM-tag]`
+- 每次加密生成新的随机 salt 和 nonce，保证相同明文加密结果不同
 
 ```
 passphrase ──┐
-             ├─► scrypt(N=32768) ──► 32B key ──► AES-256-GCM
-random salt ─┘
-random nonce ────────────────────────────────────────────►│
-                                                           ▼
+             ├─► scrypt(N=32768) ──► 32B key ──► AES-256-GCM ──► ciphertext
+random salt ─┘                                        │
+random nonce ────────────────────────────────────────►│
+                                                      ▼
                               [salt(32B)][nonce(12B)][ciphertext+tag]
 ```
 
-### `internal/oci` — OCI 操作
+### 4.3 `internal/oci` — OCI 操作
 
 | 函数 | 签名 | 说明 |
 |------|------|------|
 | `Push` | `(ctx, data []byte, ref string, encrypted bool) error` | 推送 artifact |
+| `IsEncrypted` | `(ctx, ref string) (bool, error)` | 检查加密状态（仅拉取 manifest） |
 | `Pull` | `(ctx, ref string) (*PullResult, error)` | 拉取 artifact |
 | `Delete` | `(ctx, ref string) error` | 删除远程 artifact |
-| `List` | `(ctx, ref string) ([]ArtifactInfo, error)` | 列出远程仓库镜像记录 |
+| `List` | `(ctx, ref string) ([]ArtifactInfo, error)` | 列出远程仓库镜像记录（支持 Registry/Repo）|
+
 
 **OCI Artifact 结构**
-
 - 使用标准 OCI Image Manifest 格式，`schemaVersion: 2`
 - Config mediaType：`application/vnd.oci.image.config.v1+json`（空 JSON `{}`）
-- Layer mediaType：`application/octet-stream`
-
-**Manifest Annotations**
+- Layer mediaType：`application/octet-stream`（不定义自定义类型）
+- Manifest Annotations 携带元信息：
 
 | Annotation Key | 值 | 说明 |
-|----------------|-----|------|
+|-----------------|-----|------|
 | `io.oci-sync.encrypted` | `"true"` / `"false"` | 是否加密 |
 | `io.oci-sync.version` | `"0.1.0"` | 工具版本 |
 
-## 依赖列表
+**数据结构 `ArtifactInfo`**
+- `FullName`: 镜像全名，格式为 `<registry>/<repo>:<tag>`（用于 JSON/YAML 输出）
+- `Repo`: 仓库名称
+- `Tag`: 镜像标签
+- `Digest`: 内容摘要
+- `Encrypted`: 是否加密（布尔值）
+- `Version`: 上传时的工具版本
+
+**认证**
+- 支持两种认证方式（按顺序查找，找到即用）：
+  - **配置文件** (`auths.<registry>.username/password`)：支持为每个仓库配置独立凭据
+  - **Docker credential store**：通过 `oras-go v2` 内置的 `credentials.NewStoreFromDocker()` 加载
+- 自动支持 `credsStore` / `credHelpers`（macOS keychain、Windows Credential Manager、Linux secret service）
+- 用户只需提前执行 `docker login <registry>` 即可
+
+---
+
+## 5. 依赖列表
 
 | 包 | 版本 | 用途 |
 |----|------|------|
 | `github.com/spf13/cobra` | v1.10.2 | CLI 框架 |
+| `gopkg.in/yaml.v3` | v3.x | 配置文件解析 |
 | `oras.land/oras-go/v2` | v2.6.0 | OCI push/pull |
 | `github.com/opencontainers/image-spec` | v1.1.1 | OCI 数据结构 |
 | `github.com/opencontainers/go-digest` | v1.0.0 | 内容摘要计算 |
 | `charm.land/log/v2` | v2 | 彩色日志输出 |
 | `golang.org/x/crypto` | v0.49.0 | scrypt KDF |
 
-## 安全考量
+---
+
+## 6. 安全考量
 
 | 风险 | 缓解措施 |
 |------|---------|
@@ -157,7 +211,146 @@ random nonce ──────────────────────�
 | Path traversal | Unpack 时检查解包路径必须在目标目录内 |
 | 凭据泄露 | 凭据通过系统 credential store 管理，不写入磁盘 |
 
-## 后续扩展方向
+---
+
+## 7. CLI 接口
+
+### push
+
+```bash
+oci-sync push --local <local_path> --remote <remote_path> [--passphrase <passphrase>]
+# 或使用简写
+oci-sync push -l <local_path> -r <remote_path> [--passphrase <passphrase>]
+```
+
+| 参数 | 必选 | 说明 |
+|------|------|------|
+| `--local`, `-l` | ✓ | 本地文件或目录路径 |
+| `--remote`, `-r` | ✓ | 目标仓库引用，格式：`<registry>/<repo>:<tag>` |
+| `--passphrase` | 否 | 加密口令，不提供则不加密 |
+| `--quiet`, `-q` | 否 | 静默模式，全局生效 |
+
+### pull
+
+```bash
+oci-sync pull --remote <remote_path> --local <local_path> [--passphrase <passphrase>]
+# 或使用简写
+oci-sync pull -r <remote_path> -l <local_path> [--passphrase <passphrase>]
+```
+
+| 参数 | 必选 | 说明 |
+|------|------|------|
+| `--remote`, `-r` | ✓ | 源仓库引用，格式：`<registry>/<repo>:<tag>` |
+| `--local`, `-l` | ✓ | 本地目标目录 |
+| `--passphrase` | 否 | 解密口令（内容加密时必须提供） |
+
+### \<name\> push
+
+```bash
+oci-sync <name> push --local <local_path> --tag <tag> [--passphrase <passphrase>]
+```
+
+| 参数 | 必选 | 说明 |
+|------|------|------|
+| `--local`, `-l` | ✓ | 本地文件或目录路径 |
+| `--tag` | ✓ | 目标标签 |
+| `--passphrase` | 否 | 加密口令，不提供则不加密 |
+
+### \<name\> pull
+
+```bash
+oci-sync <name> pull --tag <tag> --local <local_path> [--passphrase <passphrase>]
+```
+
+| 参数 | 必选 | 说明 |
+|------|------|------|
+| `--tag` | ✓ | 源标签 |
+| `--local`, `-l` | ✓ | 本地目标目录 |
+| `--passphrase` | 否 | 解密口令（内容加密时必须提供） |
+
+### \<name\> list
+
+```bash
+oci-sync <name> list [--format table|json|yaml]
+```
+
+| 参数 | 必选 | 说明 |
+|------|------|------|
+| `--format`, `-f` | 否 | 输出格式：`table`（默认）、`json`、`yaml` |
+
+### \<name\> delete
+
+```bash
+oci-sync <name> delete --tag <tag>
+```
+
+| 参数 | 必选 | 说明 |
+|------|------|------|
+| `--tag` | ✓ | 要删除的目标标签 |
+
+### 配置文件
+
+配置文件使用 YAML 格式，搜索路径顺序：
+1. 当前工作目录 `./oci-sync.yaml`
+2. 用户配置目录 `~/.config/oci-sync/oci-sync.yaml`
+
+**配置文件格式：**
+```yaml
+shortcuts:
+  <name>:
+    repo: <registry>/<repository>
+  x:
+    repo: <registry>/<repository>
+
+auths:
+  <registry1.example.com>:
+    username: <username>
+    password: <password>
+  <registry2.example.com>:
+    username: <username>
+    password: <password>
+```
+
+**配置说明：**
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `shortcuts.<name>.repo` | - | 动态命令的默认仓库地址 |
+| `auths.<registry>.username` | - | 该仓库的认证用户名 |
+| `auths.<registry>.password` | - | 该仓库的认证密码或令牌 |
+
+**认证优先级：** 配置文件 `auths` > Docker credential store
+
+### delete
+
+```bash
+oci-sync delete --remote <remote_path>
+# 或使用简写
+oci-sync delete -r <remote_path>
+```
+
+| 参数 | 必选 | 说明 |
+|------|------|------|
+| `--remote`, `-r` | ✓ | 目标仓库引用，格式：`<registry>/<repo>:<tag>` |
+
+### list
+
+```bash
+# 列出特定仓库的 tags
+oci-sync list --remote <registry>/<repository> [--format table|json|yaml] [-q]
+# 列出整个注册表中的所有 oci-sync 镜像
+oci-sync list -r <registry> [--format table|json|yaml] [-q]
+```
+
+| 参数 | 必选 | 说明 |
+|------|------|------|
+| `--remote`, `-r` | ✓ | 目标仓库源或注册表，格式：`<registry>/<repo>` 或 `<registry>` |
+| `--format`, `-f` | 否 | 输出格式：`table`（默认）、`json`、`yaml` |
+| `--quiet`, `-q` | 否 | 静默模式，全局生效 |
+
+---
+
+## 8. 后续扩展方向
 
 - **`--insecure`**：支持 HTTP（非 TLS）仓库
 - **`--platform`**：多架构 manifest list 支持
