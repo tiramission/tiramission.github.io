@@ -35,4 +35,13 @@ features:
   - icon: 🔧
     title: 多种安装方式
     details: 支持 Go 安装、Nix Flake 一键运行、Nix Home Manager 模块化配置
+  - icon: 🏷️
+    title: 标签管理
+    details: 支持为 OCI artifact 设置自定义标签，便于分类和筛选管理
+  - icon: 📋
+    title: 活动历史
+    details: 自动记录 push/pull/delete 等操作历史，支持查看和清空
+  - icon: 🖥️
+    title: TUI 界面
+    details: 全屏分栏交互式终端界面，可视化管理 shortcuts 和 artifacts
 ---

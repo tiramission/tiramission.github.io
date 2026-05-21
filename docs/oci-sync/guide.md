@@ -109,6 +109,12 @@ oci-sync push --local ./secret.txt --remote registry.example.com/myrepo:encrypte
 
 # 使用简写标志
 oci-sync push -l ./mydir -r registry.example.com/myrepo:latest
+
+# 推送并设置标签
+oci-sync push -l ./mydir -r registry.example.com/myrepo:latest --label app=myapp --label env=prod
+
+# 推送并设置空值标签
+oci-sync push -l ./mydir -r registry.example.com/myrepo:latest --label app=
 ```
 
 ## pull — 从仓库拉取
@@ -161,6 +167,63 @@ oci-sync delete --remote registry.example.com/myrepo:latest
 oci-sync delete -r registry.example.com/myrepo:latest
 ```
 
+## label — 管理标签
+
+```bash
+# 设置标签
+oci-sync label set --remote registry.example.com/myrepo:tag key1=value1 key2=value2
+
+# 设置空值标签
+oci-sync label set --remote registry.example.com/myrepo:tag app=
+
+# 删除标签
+oci-sync label unset --remote registry.example.com/myrepo:tag key1 key2
+```
+
+## alias — 管理 shortcuts
+
+```bash
+# 列出所有 shortcuts
+oci-sync alias list
+
+# 添加 shortcut
+oci-sync alias add x --repo registry.example.com/myteam/files
+
+# 删除 shortcut
+oci-sync alias remove x
+```
+
+## recent — 查看活动历史
+
+查看 push/pull/delete/label 等操作的历史记录（存储在本地 cache）。
+
+```bash
+# 查看最近活动（默认 20 条）
+oci-sync recent
+
+# 指定数量
+oci-sync recent --limit 10
+
+# 指定格式
+oci-sync recent --format json
+oci-sync recent --format yaml
+
+# 清空历史记录
+oci-sync recent --clear
+```
+
+## tui — 全屏交互式 TUI 管理
+
+使用全屏分栏终端界面以极佳的视觉交互管理快捷仓库和 artifacts。
+
+```bash
+# 启动 TUI 界面
+oci-sync tui
+```
+
+- **分栏结构**：左侧展示 shortcuts 列表，右侧展示该仓库下的 tags/artifacts 列表，下方实时更新展示选中 artifact 的详细元数据（包括 Full Name、Digest、Version、Size、Encryption 状态和 Labels）。
+- **极简操作**：支持 Tab/左右方向键在分栏间切换，使用 `p` 键拉取/解密（弹窗输入本地路径与密码），使用 `d` 键删除（弹窗确认），使用 `r` 键刷新 tags。
+
 ## list — 列出仓库中的文件镜像
 
 ```bash
@@ -175,6 +238,12 @@ oci-sync list -r registry.example.com/myrepo --format json
 
 # 以 YAML 格式输出
 oci-sync list -r registry.example.com/myrepo -f yaml
+
+# 筛选包含特定标签的镜像
+oci-sync list -r registry.example.com/myrepo --label app=myapp
+
+# 筛选包含特定标签 key 的镜像
+oci-sync list -r registry.example.com/myrepo --label env
 ```
 
 ## 参数说明
@@ -186,6 +255,7 @@ oci-sync list -r registry.example.com/myrepo -f yaml
 | `--tag` | 动态快捷命令使用的标签 |
 | `--passphrase` | 加密/解密口令（可选） |
 | `--format`, `-f` | 输出格式：`table`（默认）、`json`、`yaml` |
+| `--label` | 设置/筛选标签（格式：`key=value`，value 可为空；仅 `key` 时检查 key 是否存在） |
 | `--quiet`, `-q` | 开启静默模式，仅输出错误信息 |
 
 ## 工作原理
@@ -197,3 +267,9 @@ oci-sync list -r registry.example.com/myrepo -f yaml
 加密使用 scrypt 从口令派生密钥（N=32768），每次加密使用随机 salt 和 nonce，安全可靠。
 
 认证支持配置文件 per-registry 凭据（`auths.<registry>`），也兼容 Docker credential store（`~/.docker/config.json`）。
+
+**label**：通过更新 OCI manifest annotations 实现标签管理，支持设置、更新和删除标签。
+
+**recent**：所有 push/pull/delete/label 操作自动记录到本地 activity cache（`~/.cache/oci-sync/activity.json`），支持查看和清空历史记录。
+
+**tui**：全屏分栏交互界面，左侧展示 shortcuts，右侧展示 artifacts 列表，下方显示详细元数据，支持拉取、删除等操作。

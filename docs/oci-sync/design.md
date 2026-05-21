@@ -1,16 +1,18 @@
 # oci-sync 设计文档
 
-> 版本：0.1.0 | 更新时间：2026-04-16
+> 版本：0.6.0 | 更新时间：2026-05-21
 
 ## 1. 项目概述
 
-`oci-sync` 是一个 Go 语言命令行工具，将本地文件或目录以 **OCI artifact** 的形式同步到任意兼容 OCI Distribution Spec 的镜像仓库（Docker Hub、GHCR、Harbor、ACR 等），支持可选的 AES-256-GCM 加密。
+`oci-sync` 是一个 Go 语言命令行工具，将本地文件或目录以 **OCI artifact** 的形式同步到任意兼容 OCI Distribution Spec 的镜像仓库（Docker Hub、GHCR、Harbor、ACR 等），支持可选的 AES-256-GCM 加密，并记录所有操作到本地 activity cache。
 
 ### 使用场景
 
 - 将配置文件、数据集、模型文件等任意内容存入 OCI 仓库进行版本管理
 - 跨机器、跨环境分发文件，借助镜像仓库的权限管理做访问控制
 - 敏感文件加密存储，密钥不离开本地
+- 通过自定义标签对 artifacts 进行分类和筛选管理
+- 使用 TUI 界面可视化管理快捷仓库和 artifacts
 
 ---
 
@@ -20,7 +22,8 @@
 ┌──────────────────────────────────────────────────────────┐
 │                         CLI 层                            │
 │ cmd/root.go   cmd/push.go   cmd/pull.go   cmd/shortcut.go│
-│ cmd/delete.go cmd/list.go                                │
+│ cmd/delete.go cmd/list.go   cmd/label.go  cmd/alias.go   │
+│ cmd/recent.go cmd/tui.go                                 │
 └──────────────┬───────────────┬──────────────┬────────────┘
                │              │
       ┌────────▼───┐    ┌─────▼────────┐
@@ -34,6 +37,12 @@
       │ AES-256-GCM │   │  Store (~/.docker/    │
       │ + scrypt    │   │  config.json)         │
       └─────────────┘   └──────────────────────┘
+                              │
+                     ┌────────▼────────────────┐
+                     │       cache            │
+                     │  ~/.cache/oci-sync/    │
+                     │   activity.json       │
+                     └───────────────────────┘
 ```
 
 **数据流（push）**
@@ -74,7 +83,41 @@ CLI 参数传入 → [oci.List] (支持 Registry/Repo 自动解析)
              → [reg.Repositories] (若为 Registry) → 遍历 repos
              → [repo.Tags] → 遍历 tags → [repo.Fetch] 获取 Manifest
              → 过滤 io.oci-sync.version 标记 → 返回 ArtifactInfo 列表
-             → 格式化表格输出 (显示 REPO, TAG, DIGEST 等)
+             → 支持 --label 筛选 → 格式化表格输出 (显示 REPO, TAG, DIGEST, LABELS 等)
+```
+
+**数据流（label set/unset）**
+```
+CLI 参数传入 → [oci.UpdateAnnotations] 获取 manifest
+           → 修改 annotations (set 添加/更新, unset 删除指定 key)
+           → Push 新 manifest → 更新 tag 指向新 digest
+```
+
+**数据流（alias add/remove）**
+```
+CLI 参数传入 → 读写配置文件 ~/.config/oci-sync/oci-sync.yaml
+           → 修改 shortcuts 字段 → 保存
+```
+
+**数据流（recent）**
+```
+CLI 参数传入 → 读取 ~/.cache/oci-sync/activity.json
+           → 支持 --limit 限制数量、--format 指定格式 (table/json/yaml)
+           → 支持 --clear 清空历史记录
+```
+
+**数据流（tui）**
+```
+CLI 启动 → 启动全屏分栏交互界面 (Tab 切换 Focus，p 拉取，d 删除，r 刷新)
+        → [oci.List] 获取快捷方式下的镜像 tag 列表并更新右侧面板
+        → [oci.Pull] 或 [oci.Delete] 执行本地拉取或远程删除，并以居中弹窗展示执行状态
+```
+
+**数据流（activity recording）**
+```
+CLI push/pull/delete/label 操作成功
+           → 写入 ~/.cache/oci-sync/activity.json
+           → 记录类型、时间戳、远程引用、本地路径、标签、操作结果
 ```
 
 ---
@@ -96,18 +139,28 @@ oci-sync/
 │   ├── shortcut.go                # 动态 shortcut 子命令组
 │   ├── delete.go                  # delete 子命令
 │   ├── list.go                    # list 子命令
+│   ├── label.go                   # label 子命令 (set/unset)
+│   ├── alias.go                   # alias 子命令 (list/add/remove)
+│   ├── recent.go                  # recent 子命令（查看活动历史）
+│   ├── tui.go                     # tui 子命令（全屏分栏管理）
 │   └── utils.go                   # 工具函数（formatBytes）
 └── internal/
     ├── config/
-    │   └── config.go              # 配置文件支持（Viper）
+    │   └── config.go              # 配置文件支持
     ├── archive/
     │   ├── archive.go             # tar.gz 打包/解包
     │   └── archive_test.go        # 单元测试
     ├── crypto/
     │   ├── crypto.go              # AES-256-GCM 加密/解密
     │   └── crypto_test.go         # 单元测试
-    └── oci/
-        └── oci.go                 # OCI push/pull（oras-go v2）
+    ├── oci/
+    │   └── oci.go                 # OCI push/pull（oras-go v2）
+    ├── cache/
+    │   └── cache.go               # Activity cache 持久化
+    ├── xdg/
+    │   └── xdg.go                 # XDG 目录规范支持
+    └── version/
+    │   └── version.go             # 版本信息
 ```
 
 ---
@@ -152,11 +205,12 @@ random nonce ──────────────────────�
 
 | 函数 | 签名 | 说明 |
 |------|------|------|
-| `Push` | `(ctx, data []byte, ref string, encrypted bool) error` | 推送 artifact |
+| `Push` | `(ctx, data []byte, ref string, encrypted bool, labels map[string]string) error` | 推送 artifact（支持 labels） |
 | `IsEncrypted` | `(ctx, ref string) (bool, error)` | 检查加密状态（仅拉取 manifest） |
 | `Pull` | `(ctx, ref string) (*PullResult, error)` | 拉取 artifact |
 | `Delete` | `(ctx, ref string) error` | 删除远程 artifact |
 | `List` | `(ctx, ref string) ([]ArtifactInfo, error)` | 列出远程仓库镜像记录（支持 Registry/Repo）|
+| `UpdateAnnotations` | `(ctx, ref string, updates map[string]string, removeKeys []string) error` | 更新 manifest annotations（set/unset labels）|
 
 
 **OCI Artifact 结构**
@@ -164,11 +218,14 @@ random nonce ──────────────────────�
 - Config mediaType：`application/vnd.oci.image.config.v1+json`（空 JSON `{}`）
 - Layer mediaType：`application/octet-stream`（不定义自定义类型）
 - Manifest Annotations 携带元信息：
+  - 系统保留 annotation：`io.oci-sync.encrypted`、`io.oci-sync.version`
+  - 用户自定义 labels：存储于 annotations，可通过 `--label` 设置
 
 | Annotation Key | 值 | 说明 |
 |-----------------|-----|------|
 | `io.oci-sync.encrypted` | `"true"` / `"false"` | 是否加密 |
 | `io.oci-sync.version` | `"0.1.0"` | 工具版本 |
+| 用户自定义 | 任意字符串 | 通过 `--label key=value` 设置 |
 
 **数据结构 `ArtifactInfo`**
 - `FullName`: 镜像全名，格式为 `<registry>/<repo>:<tag>`（用于 JSON/YAML 输出）
@@ -177,6 +234,7 @@ random nonce ──────────────────────�
 - `Digest`: 内容摘要
 - `Encrypted`: 是否加密（布尔值）
 - `Version`: 上传时的工具版本
+- `Labels`: 用户自定义标签映射（`map[string]string`）
 
 **认证**
 - 支持两种认证方式（按顺序查找，找到即用）：
@@ -185,6 +243,40 @@ random nonce ──────────────────────�
 - 自动支持 `credsStore` / `credHelpers`（macOS keychain、Windows Credential Manager、Linux secret service）
 - 用户只需提前执行 `docker login <registry>` 即可
 
+### 4.4 `internal/cache` — Activity Cache
+
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `InitCache` | `() error` | 初始化 cache 目录（`~/.cache/oci-sync/`） |
+| `AddActivity` | `(Activity) error` | 添加活动记录 |
+| `GetRecentActivities` | `(limit int) ([]Activity, error)` | 获取最近活动 |
+| `ClearActivities` | `() error` | 清空所有活动记录 |
+
+**Activity 数据结构**
+```go
+type Activity struct {
+    Type      ActivityType  // push/pull/delete/label
+    Timestamp time.Time     // 操作时间
+    RemoteRef string        // 远程引用
+    LocalPath string        // 本地路径（push/pull）
+    Labels    []string      // 标签（label 操作）
+    Success   bool          // 是否成功
+    Error     string        // 错误信息
+}
+```
+
+**存储位置**：遵循 XDG Base Directory Spec
+- 默认：`~/.cache/oci-sync/activity.json`
+- 支持 `XDG_CACHE_HOME` 环境变量覆盖
+
+### 4.5 `internal/xdg` — XDG 目录规范
+
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `ConfigDir` | `() string` | 配置目录（`$XDG_CONFIG_HOME` 或 `~/.config`） |
+| `CacheDir` | `() string` | 缓存目录（`$XDG_CACHE_HOME` 或 `~/.cache`） |
+| `DataDir` | `() string` | 数据目录（`$XDG_DATA_HOME` 或 `~/.local/share`） |
+
 ---
 
 ## 5. 依赖列表
@@ -192,7 +284,7 @@ random nonce ──────────────────────�
 | 包 | 版本 | 用途 |
 |----|------|------|
 | `github.com/spf13/cobra` | v1.10.2 | CLI 框架 |
-| `gopkg.in/yaml.v3` | v3.x | 配置文件解析 |
+| `gopkg.in/yaml.v3` | v3.x | 配置文件解析（替代 viper）|
 | `oras.land/oras-go/v2` | v2.6.0 | OCI push/pull |
 | `github.com/opencontainers/image-spec` | v1.1.1 | OCI 数据结构 |
 | `github.com/opencontainers/go-digest` | v1.0.0 | 内容摘要计算 |
@@ -218,9 +310,9 @@ random nonce ──────────────────────�
 ### push
 
 ```bash
-oci-sync push --local <local_path> --remote <remote_path> [--passphrase <passphrase>]
+oci-sync push --local <local_path> --remote <remote_path> [--passphrase <passphrase>] [--label <key=value>]
 # 或使用简写
-oci-sync push -l <local_path> -r <remote_path> [--passphrase <passphrase>]
+oci-sync push -l <local_path> -r <remote_path> [--passphrase <passphrase>] [--label <key=value>]
 ```
 
 | 参数 | 必选 | 说明 |
@@ -228,6 +320,7 @@ oci-sync push -l <local_path> -r <remote_path> [--passphrase <passphrase>]
 | `--local`, `-l` | ✓ | 本地文件或目录路径 |
 | `--remote`, `-r` | ✓ | 目标仓库引用，格式：`<registry>/<repo>:<tag>` |
 | `--passphrase` | 否 | 加密口令，不提供则不加密 |
+| `--label` | 否 | 设置标签，可重复使用（格式：`key=value`，value 可为空） |
 | `--quiet`, `-q` | 否 | 静默模式，全局生效 |
 
 ### pull
@@ -247,7 +340,7 @@ oci-sync pull -r <remote_path> -l <local_path> [--passphrase <passphrase>]
 ### \<name\> push
 
 ```bash
-oci-sync <name> push --local <local_path> --tag <tag> [--passphrase <passphrase>]
+oci-sync <name> push --local <local_path> --tag <tag> [--passphrase <passphrase>] [--label <key=value>]
 ```
 
 | 参数 | 必选 | 说明 |
@@ -255,6 +348,7 @@ oci-sync <name> push --local <local_path> --tag <tag> [--passphrase <passphrase>
 | `--local`, `-l` | ✓ | 本地文件或目录路径 |
 | `--tag` | ✓ | 目标标签 |
 | `--passphrase` | 否 | 加密口令，不提供则不加密 |
+| `--label` | 否 | 设置标签，可重复使用（格式：`key=value`，value 可为空） |
 
 ### \<name\> pull
 
@@ -271,12 +365,13 @@ oci-sync <name> pull --tag <tag> --local <local_path> [--passphrase <passphrase>
 ### \<name\> list
 
 ```bash
-oci-sync <name> list [--format table|json|yaml]
+oci-sync <name> list [--format table|json|yaml] [--label <key>=<value>]
 ```
 
 | 参数 | 必选 | 说明 |
 |------|------|------|
 | `--format`, `-f` | 否 | 输出格式：`table`（默认）、`json`、`yaml` |
+| `--label` | 否 | 筛选标签（`key=value` 精确匹配，`key` 仅检查 key 存在），可重复 |
 
 ### \<name\> delete
 
@@ -337,16 +432,108 @@ oci-sync delete -r <remote_path>
 
 ```bash
 # 列出特定仓库的 tags
-oci-sync list --remote <registry>/<repository> [--format table|json|yaml] [-q]
+oci-sync list --remote <registry>/<repository> [--format table|json|yaml] [-q] [--label <key=value>]
 # 列出整个注册表中的所有 oci-sync 镜像
-oci-sync list -r <registry> [--format table|json|yaml] [-q]
+oci-sync list -r <registry> [--format table|json|yaml] [-q] [--label <key=value>]
 ```
 
 | 参数 | 必选 | 说明 |
 |------|------|------|
 | `--remote`, `-r` | ✓ | 目标仓库源或注册表，格式：`<registry>/<repo>` 或 `<registry>` |
 | `--format`, `-f` | 否 | 输出格式：`table`（默认）、`json`、`yaml` |
+| `--label` | 否 | 筛选标签（`key=value` 精确匹配，`key` 仅检查 key 存在），可重复 |
 | `--quiet`, `-q` | 否 | 静默模式，全局生效 |
+
+### label
+
+管理 OCI artifact 上的标签（存储于 manifest annotations）。
+
+```bash
+# 设置标签
+oci-sync label set --remote <remote_path> <key1=value1> [<key2=value2>...]
+
+# 删除标签
+oci-sync label unset --remote <remote_path> <key1> [<key2>...]
+```
+
+| 参数 | 必选 | 说明 |
+|------|------|------|
+| `--remote`, `-r` | ✓ | 目标仓库引用，格式：`<registry>/<repo>:<tag>` |
+| `key=value` | ✓（set） | 设置标签，value 可为空字符串 |
+| `key` | ✓（unset） | 删除指定标签 |
+
+### alias
+
+管理配置文件中的 shortcuts。
+
+```bash
+# 列出所有 shortcuts
+oci-sync alias list
+
+# 添加 shortcut
+oci-sync alias add <name> --repo <registry>/<repository>
+
+# 删除 shortcut
+oci-sync alias remove <name>
+```
+
+| 参数 | 必选 | 说明 |
+|------|------|------|
+| `--repo` | ✓（add） | shortcut 对应的仓库地址 |
+
+**注意**：若配置文件不可写，会输出警告但不会报错。
+
+### recent
+
+查看本地 activity cache 中记录的操作历史。
+
+```bash
+# 查看最近 20 条活动（默认）
+oci-sync recent
+
+# 指定显示数量
+oci-sync recent --limit 10
+
+# 指定输出格式
+oci-sync recent --format json
+oci-sync recent --format yaml
+
+# 清空所有活动记录
+oci-sync recent --clear
+```
+
+| 参数 | 必选 | 说明 |
+|------|------|------|
+| `--limit`, `-n` | 否 | 最大显示条数，默认 20 |
+| `--format`, `-f` | 否 | 输出格式：`table`（默认）、`json`、`yaml` |
+| `--clear` | 否 | 清空所有活动记录 |
+
+**存储位置**：`~/.cache/oci-sync/activity.json`（支持 `XDG_CACHE_HOME` 环境变量）
+
+### tui
+
+启动全屏 TUI 交互界面，分栏管理 shortcuts 的 artifacts。
+
+```bash
+# 启动 TUI 界面
+oci-sync tui
+```
+
+**界面分区**：
+- **Shortcuts (左侧边栏)**：展示配置的 shortcuts，可按 Tab 或左右方向键切换聚焦，使用 Up/Down 导航，Enter 键加载对应仓库下的 artifacts。
+- **Artifacts (右侧主栏)**：显示当前 shortcut 下 of tags 列表（包含 `TAG`、`SIZE`、`ENCRYPTED`、`VERSION`），宽度自适应调整。
+- **Details & Status (下方详情栏)**：实时显示当前选中 artifact 的 Full Name、Digest、Version、Size、Encryption 状态以及 Labels。
+- **弹窗 Dialog (居中浮动)**：路径输入、密码提示、删除确认及执行状态将以双线框浮动弹窗的形式居中显示。
+
+**快捷键**：
+- `Tab` / `左右方向键` / `h/l`：在 Shortcuts 与 Artifacts 栏之间切换焦点
+- `Up/Down` / `j/k`：在当前聚焦的栏内导航
+- `Enter` (在 Shortcuts 栏)：加载选中的仓库
+- `p` (在 Artifacts 栏)：拉取选中的 artifact
+- `d` (在 Artifacts 栏)：删除选中的 artifact
+- `r` (在 Artifacts 栏)：重新加载当前 tag 列表
+- `Esc`：关闭输入弹窗或将焦点退回到左侧 Shortcuts 栏
+- `q` / `Ctrl+C`：退出工具
 
 ---
 
